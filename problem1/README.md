@@ -25,7 +25,7 @@ In this section, we're going to set up a small yet functional network, mimicking
         This command confirms that `node1` can reach its default gateway (the router).
 
         ```bash
-        nima@parsida:~/SDMN/HW2/cloudComputing/problem1/Part1$ sudo bash ping_nodes.sh node1 router
+        nima@parsida:~/SDMN/HW2/cloudComputing/problem1$ sudo bash ping_nodes.sh node1 router
         PING 172.0.0.1 (172.0.0.1) 56(84) bytes of data.
         64 bytes from 172.0.0.1: icmp_seq=1 ttl=64 time=0.057 ms
         64 bytes from 172.0.0.1: icmp_seq=2 ttl=64 time=0.059 ms
@@ -43,7 +43,7 @@ In this section, we're going to set up a small yet functional network, mimicking
         This is a critical test! `node1` and `node3` are located in two different subnets. [cite_start]For them to communicate, packets **must** traverse through the router[cite: 39]. This test verifies that our router is correctly routing packets between these distinct subnets.
 
         ```bash
-        nima@parsida:~/SDMN/HW2/cloudComputing/problem1/Part1$ sudo bash ping_nodes.sh node1 node3
+        nima@parsida:~/SDMN/HW2/cloudComputing/problem1$ sudo bash ping_nodes.sh node1 node3
         PING 10.10.0.2 (10.10.0.2) 56(84) bytes of data.
         64 bytes from 10.10.0.2: icmp_seq=1 ttl=63 time=0.357 ms
         64 bytes from 10.10.0.2: icmp_seq=2 ttl=63 time=0.064 ms
