@@ -64,3 +64,94 @@ In this section, we're going to set up a small yet functional network, mimicking
     nima@parsida:~/SDMN/HW2/cloudComputing/problem1$ sudo ./cleanup.sh
     # (Again, output might be minimal or none)
     ```
+
+### Part 2: Routing without a Router (Figure 2)
+
+This section explains how to enable communication between the two distinct subnets ($172.0.0.0/24$ and $10.10.0.0/24$) after the central router and its links to the bridges (`br1` and `br2`) are removed, as depicted in Figure 2 of the assignment. Since direct routing through a dedicated router is no longer an option, we need to leverage features within the root network namespace to facilitate inter-subnet communication. No implementation is required for this part.
+
+**Current Scenario (as per Figure 2):**
+* `node1` and `node2` are in the $172.0.0.0/24$ subnet, connected to `br1`.
+* `node3` and `node4` are in the $10.10.0.0/24$ subnet, connected to `br2`.
+* There is no direct connection or routing device between `br1` and `br2`.
+
+**Solution Approach:**
+
+To enable routing between these two isolated subnets in the absence of a dedicated router, we can configure the `root` network namespace to act as a router itself. This involves assigning IP addresses to the bridges in the root namespace, enabling IP forwarding, and utilizing Network Address Translation (NAT) rules to ensure proper packet flow and return paths.
+
+**Detailed Steps and Rules in the Root Namespace (with example commands and outputs):**
+
+First, let's confirm our bridges are up and running in the root namespace. This is typically done after running `create_topology.sh` (and before removing the router, if you were to actually implement this scenario):
+
+```bash
+nima@parsida:~/SDMN/HW2/cloudComputing/problem1$ sudo ip link show type bridge
+22: br1: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default qlen 1000
+    link/ether 86:ea:53:ed:73:04 brd ff:ff:ff:ff:ff:ff
+23: br2: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default qlen 1000
+    link/ether 8a:af:91:2f:fe:b6 brd ff:ff:ff:ff:ff:ff
+‍‍‍```
+
+The output confirms that both `br1` and `br2` are present and in an `UP` state.
+
+1.  **Assign IP Addresses to Bridges:**
+    Each bridge (`br1` and `br2`) must be assigned an IP address within its respective subnet. This time, these IP addresses will reside directly on the bridge interfaces in the `root` network namespace. These IPs will serve as the default gateways for the nodes connected to them.
+
+    * For `br1`:
+        ```bash
+        nima@parsida:~/SDMN/HW2/cloudComputing/problem1$ sudo ip addr add 172.0.0.1/24 dev br1
+        # No direct output on success
+        ```
+    * For `br2`:
+        ```bash
+        nima@parsida:~/SDMN/HW2/cloudComputing/problem1$ sudo ip addr add 10.10.0.1/24 dev br2
+        # No direct output on success
+        ```
+    To verify the IP addresses have been successfully assigned to the bridges in the root namespace, you can check:
+    ```bash
+    nima@parsida:~/SDMN/HW2/cloudComputing/problem1$ ip a show br1
+    22: br1: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default qlen 1000
+        link/ether 86:ea:53:ed:73:04 brd ff:ff:ff:ff:ff:ff
+        inet 172.0.0.1/24 scope global br1
+           valid_lft forever preferred_lft forever
+    # You would see similar output for br2 with its assigned IP.
+    ```
+
+2.  **Enable IP Forwarding in the Root Namespace:**
+    Just like a dedicated router, the root namespace needs to be configured to allow the forwarding of IP packets between different network interfaces (in this case, between `br1` and `br2`). This is a crucial step for inter-subnet communication.
+
+    ```bash
+    nima@parsida:~/SDMN/HW2/cloudComputing/problem1$ sudo sysctl -w net.ipv4.ip_forward=1
+    net.ipv4.ip_forward = 1
+    ```
+    The output `net.ipv4.ip_forward = 1` confirms that IP forwarding has been successfully enabled.
+
+3.  **Configure Default Gateways on Nodes:**
+    The default gateway for each node should still point to the IP address of its directly connected bridge in the root namespace. This ensures that any traffic destined for a network outside its local subnet is sent to the respective bridge.
+    * For `node1` and `node2`: The default gateway would be `172.0.0.1` (the IP of `br1`).
+    * For `node3` and `node4`: The default gateway would be `10.10.0.1` (the IP of `br2`).
+    (These routes would have been set up by `create_topology.sh` for the router's IPs. In this scenario without the router, if you were to implement this, you would need to adjust the default routes in the node namespaces to point to these new bridge IPs.)
+
+4.  **Implement Network Address Translation (NAT) with Iptables:**
+    When a packet from `node1` (e.g., $172.0.0.2$) needs to reach `node3` (e.g., $10.10.0.2$), it will first be routed to `br1` in the root namespace. For the return traffic to find its way back, and to manage the different subnets, we can use Source Network Address Translation (SNAT) or `MASQUERADE`. This changes the source IP address of outgoing packets from one subnet to the IP address of the bridge in the root namespace when crossing between subnets.
+
+    * Rule for packets going from $172.0.0.0/24$ to $10.10.0.0/24$ (out through br2):
+        ```bash
+        nima@parsida:~/SDMN/HW2/cloudComputing/problem1$ sudo iptables -t nat -A POSTROUTING -o br2 -j MASQUERADE
+        # No direct output on success
+        ```
+    * Rule for packets going from $10.10.0.0/24$ to $172.0.0.0/24$ (out through br1):
+        ```bash
+        nima@parsida:~/SDMN/HW2/cloudComputing/problem1$ sudo iptables -t nat -A POSTROUTING -o br1 -j MASQUERADE
+        # No direct output on success
+        ```
+    To verify that the iptables rules have been added, you can list them:
+    ```bash
+    nima@parsida:~/SDMN/HW2/cloudComputing/problem1$ sudo iptables -t nat -L POSTROUTING -n -v
+    # You would see output similar to this, showing your MASQUERADE rules
+    Chain POSTROUTING (policy ACCEPT 0 packets, 0 bytes)
+     pkts bytes target     prot opt in     out     source               destination
+        0     0 MASQUERADE  all  --  * br2     0.0.0.0/0            0.0.0.0/0
+        0     0 MASQUERADE  all  --  * br1     0.0.0.0/0            0.0.0.0/0
+    ```
+
+**Conclusion:**
+By assigning IP addresses directly to the bridges within the root namespace, enabling IP forwarding, and applying appropriate NAT rules using `iptables`, the root network namespace effectively acts as a simple router, allowing full connectivity between the two previously isolated subnets as shown in Figure 2.
