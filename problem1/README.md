@@ -155,3 +155,74 @@ The output confirms that both `br1` and `br2` are present and in an `UP` state.
 
 **Conclusion:**
 By assigning IP addresses directly to the bridges within the root namespace, enabling IP forwarding, and applying appropriate NAT rules using `iptables`, the root network namespace effectively acts as a simple router, allowing full connectivity between the two previously isolated subnets as shown in Figure 2.
+
+### Part 3: Routing across Different Servers (Layer 2) (Figure 3)
+
+This section explains how to enable communication between network namespaces that are located on different physical or virtual servers, assuming these servers can see each other at Layer 2 (e.g., they are on the same local area network or connected via a switch). No implementation is required for this part.
+
+**Current Scenario (as per Figure 3):**
+* **Server 1:** Hosts `node1` ($172.0.0.2/24$) and `node2` ($172.0.0.3/24$), connected to `br1`.
+* **Server 2:** Hosts `node3` ($10.10.0.2/24$) and `node4` ($10.10.0.3/24$), connected to `br2`.
+* `Server 1` and `Server 2` are connected via a `switch` at Layer 2, meaning they can directly communicate using MAC addresses within the same broadcast domain. Each server will have a physical/virtual network interface (e.g., `eth0`) connected to this switch.
+
+**Solution Approach:**
+
+To enable routing between namespaces residing on different servers, each server will need to participate in the routing process. This involves configuring the root network namespace of each server to act as a gateway for its local namespaces to reach the other server's networks. We will use the main network interfaces of the servers (connected to the switch) to forward traffic, and typically, we'll need to enable IP forwarding and set up routing rules on each server. Depending on the desired networking model (e.g., direct routing vs. NAT), additional rules like Network Address Translation (NAT) might be required.
+
+**Detailed Steps and Rules on the Servers:**
+
+Let's assume:
+* `Server 1` has an external IP address of `192.168.1.10` on its interface connected to the switch (e.g., `eth0`).
+* `Server 2` has an external IP address of `192.168.1.20` on its interface connected to the switch (e.g., `eth0`).
+* Both `192.168.1.10` and `192.168.1.20` are in the same subnet (e.g., `192.168.1.0/24`) and can directly reach each other over Layer 2.
+
+1.  **Internal Configuration on Each Server:**
+    * **On Server 1:**
+        * `node1` and `node2` are connected to `br1`. The `br1` on `Server 1` should be configured with an IP address from its local subnet (e.g., `172.0.0.1/24`). The default gateways for `node1` and `node2` should point to this IP (`172.0.0.1`).
+    * **On Server 2:**
+        * `node3` and `node4` are connected to `br2`. The `br2` on `Server 2` should be configured with an IP address from its local subnet (e.g., `10.10.0.1/24`). The default gateways for `node3` and `node4` should point to this IP (`10.10.0.1`).
+
+2.  **Enable IP Forwarding on Both Servers:**
+    Each server needs to be able to forward packets between its internal networks (namespaces via bridges) and its external network interface (connected to the switch).
+    * **On Server 1:**
+        ```bash
+        sudo sysctl -w net.ipv4.ip_forward=1
+        ```
+    * **On Server 2:**
+        ```bash
+        sudo sysctl -w net.ipv4.ip_forward=1
+        ```
+
+3.  **Configure Routing Rules on Each Server (in their respective Root Namespaces):**
+    To allow traffic from namespaces on one server to reach namespaces on the other server, explicit routing rules are required on the root namespace of each server.
+
+    * **On Server 1 (to reach Server 2's subnet):**
+        Add a route for the $10.10.0.0/24$ subnet (where `node3` and `node4` reside) to be routed via `Server 2`'s external IP address (`192.168.1.20`), through `Server 1`'s external interface (e.g., `eth0`).
+        ```bash
+        sudo ip route add 10.10.0.0/24 via 192.168.1.20 dev eth0
+        ```
+
+    * **On Server 2 (to reach Server 1's subnet):**
+        Add a route for the $172.0.0.0/24$ subnet (where `node1` and `node2` reside) to be routed via `Server 1`'s external IP address (`192.168.1.10`), through `Server 2`'s external interface (e.g., `eth0`).
+        ```bash
+        sudo ip route add 172.0.0.0/24 via 192.168.1.10 dev eth0
+        ```
+
+4.  **Optional: Implement Network Address Translation (NAT) with Iptables:**
+    NAT might be necessary if the internal IP address ranges ($172.0.0.0/24$ and $10.10.0.0/24$) are private and not directly routable between the servers' external interfaces, or if you want to conserve IP addresses on the external network. If direct routing is sufficient (i.e., the external network knows how to route to these private subnets on the servers), NAT might not be strictly necessary, but it's a common approach.
+
+    * **On Server 1 (for traffic leaving $172.0.0.0/24$ to cross to $10.10.0.0/24$):**
+        This rule translates the source IP of packets originating from `Server 1`'s internal namespaces (e.g., `172.0.0.2`) to `Server 1`'s external IP (`192.168.1.10`) when they exit `eth0` towards `Server 2`.
+        ```bash
+        sudo iptables -t nat -A POSTROUTING -s 172.0.0.0/24 -o eth0 -j MASQUERADE
+        ```
+
+    * **On Server 2 (for traffic leaving $10.10.0.0/24$ to cross to $172.0.0.0/24$):**
+        Similarly, this rule translates the source IP of packets originating from `Server 2`'s internal namespaces (e.g., `10.10.0.2`) to `Server 2`'s external IP (`192.168.1.20`) when they exit `eth0` towards `Server 1`.
+        ```bash
+        sudo iptables -t nat -A POSTROUTING -s 10.10.0.0/24 -o eth0 -j MASQUERADE
+        ```
+    * **Important Note on NAT:** If NAT is used, the return traffic from the destination node (e.g., `node3` on `Server 2`) will be sent back to the NAT'd IP address (e.g., `192.168.1.10`). The server performing the NAT (e.g., `Server 1`) will then de-NAT the packet and forward it to the original internal IP address (`172.0.0.2`). This is managed automatically by the `MASQUERADE` rule as long as connection tracking is active.
+
+**Conclusion:**
+By setting up internal bridge IPs, enabling IP forwarding on both servers, and configuring specific routing rules to point to the other server's external IP for remote subnets, communication can be established between namespaces on different physical or virtual hosts. Optional NAT rules can be added for IP address management or security if required by the network design.
